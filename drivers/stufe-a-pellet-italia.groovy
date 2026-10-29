@@ -21,8 +21,6 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Field
-import java.math.MathContext
-import java.math.RoundingMode
 
 @Field static final String DRIVER_VERSION = "1.0.0"
 
@@ -959,7 +957,7 @@ private List tokenize(String s) {
             if (c == '0' && i + 1 < s.length() && (s.charAt(i + 1) == 'x' || s.charAt(i + 1) == 'X')) {
                 j = i + 2
                 while (j < s.length() && Character.digit(s.charAt(j), 16) >= 0) j++
-                tokens << [n: new BigDecimal(new BigInteger(s.substring(i + 2, j), 16))]
+                tokens << [n: new BigDecimal(Long.parseLong(s.substring(i + 2, j), 16))]
             } else {
                 while (j < s.length() && (Character.isDigit(s.charAt(j)) || s.charAt(j) == '.')) j++
                 if (j < s.length() && (s.charAt(j) == 'e' || s.charAt(j) == 'E') && j + 1 < s.length() &&
@@ -1117,8 +1115,8 @@ private BigDecimal parseMultiplicative(Map ctx) {
             v = v * r
         } else {
             if (r == 0) throw new ArithmeticException("Division durch 0")
-            BigDecimal floorDiv = v.divide(r, 0, RoundingMode.FLOOR)
-            if (op == "/") v = v.divide(r, MathContext.DECIMAL64)
+            BigDecimal floorDiv = v.divide(r, 0, BigDecimal.ROUND_FLOOR)
+            if (op == "/") v = v.divide(r, 12, BigDecimal.ROUND_HALF_EVEN)
             else if (op == "//") v = floorDiv
             else v = v - r * floorDiv   // Python-Modulo (Vorzeichen des Divisors)
         }
@@ -1181,7 +1179,7 @@ private BigDecimal callFunction(String name, List args) {
         case "abs": return args[0].abs()
         case "round":
             int digits = args.size() > 1 ? truncate(args[1]) as int : 0
-            return args[0].setScale(digits, RoundingMode.HALF_EVEN)
+            return args[0].setScale(digits, BigDecimal.ROUND_HALF_EVEN)
         case "min": return args.min()
         case "max": return args.max()
     }
@@ -1193,14 +1191,14 @@ private BigDecimal callFunction(String name, List args) {
  * ====================================================================== */
 
 private long truncate(BigDecimal v) {
-    v.setScale(0, RoundingMode.DOWN).longValue()
+    v.setScale(0, BigDecimal.ROUND_DOWN).longValue()
 }
 
 private normalize(BigDecimal v) {
     if (v == null) return null
     BigDecimal s = v.stripTrailingZeros()
     if (s.scale() <= 0) return s.toBigInteger() as long
-    return v.setScale(Math.min(s.scale(), 2), RoundingMode.HALF_UP)
+    return v.setScale(Math.min(s.scale(), 2), BigDecimal.ROUND_HALF_UP)
 }
 
 private String fmtNum(v) {
@@ -1219,14 +1217,14 @@ private String temperatureUnit() {
 private fromCelsius(value) {
     if (value == null) return null
     if (location?.temperatureScale == "F") {
-        return ((value as BigDecimal) * 9 / 5 + 32).setScale(1, RoundingMode.HALF_UP)
+        return ((value as BigDecimal) * 9 / 5 + 32).setScale(1, BigDecimal.ROUND_HALF_UP)
     }
     return value
 }
 
 private BigDecimal toCelsius(BigDecimal value) {
     if (location?.temperatureScale == "F") {
-        return ((value - 32) * 5 / 9).setScale(1, RoundingMode.HALF_UP)
+        return ((value - 32) * 5 / 9).setScale(1, BigDecimal.ROUND_HALF_UP)
     }
     return value
 }
