@@ -1,68 +1,70 @@
-# Stufe a Pellet Italia – Hubitat-Treiber
+# Stufe a Pellet Italia – Hubitat driver
 
-Hubitat-Treiber für Pelletöfen, die mit der App **„Stufe a pellet Italia“** gesteuert werden
-(Micronova-Steuerung mit Navel-WLAN-Modul, Cloud „Agua IOT“).
+*English · [Deutsch](README.de.md)*
 
-Der Treiber nutzt dieselbe Cloud-API wie die App (`https://stufepelletitalia.agua-iot.com`,
-Customer-Code `015142`). Die Werte werden über die Registerkarte umgerechnet, die der Server
-für deinen Ofen liefert. Deshalb sollte der Treiber mit allen Modellen dieser Marke funktionieren.
+A Hubitat driver for pellet stoves controlled with the **“Stufe a pellet Italia”** app
+(Micronova controller with Navel Wi-Fi module, “Agua IOT” cloud).
 
-## Funktionen
+The driver uses the same cloud API as the app (`https://stufepelletitalia.agua-iot.com`,
+customer code `015142`). Values are converted using the register map the server supplies for
+your stove. The driver should therefore work with all models of this brand.
 
-| Hubitat | Bedeutung |
+## Features
+
+| Hubitat | Meaning |
 |---|---|
-| `switch` on/off, `thermostatMode` heat/off | Ofen ein-/ausschalten |
-| `temperature` | Raumtemperatur am Ofen |
-| `heatingSetpoint` / `setHeatingSetpoint()` | Raum-Solltemperatur |
-| `thermostatOperatingState` | `heating` oder `idle` |
-| `powerLevel` / `setPowerLevel()` | Leistungsstufe (Min./Max. in `powerLevelMin`/`powerLevelMax`) |
-| `stoveStatus`, `stoveStatusCode` | Betriebszustand im Klartext (z.B. START, WORK, ECO STOP) |
-| `alarm`, `alarmCode` | aktueller Alarm |
-| `flueGasTemperature`, `realPower`, `exhaustFanSpeed`, `pelletsLow`, Betriebsstunden … | nur wenn dein Ofen das Register hat |
-| `waterTemperature`, `waterSetpoint` / `setWaterSetpoint()` | bei wassergeführten Öfen |
-| `syncClock` | Ofenuhr auf Hub-Zeit stellen |
-| `setRegister(key, value)` / `listRegisters` | Expertenzugriff auf alle Register |
-| `cloudStatus`, `lastUpdate` | Verbindungsstatus |
+| `switch` on/off, `thermostatMode` heat/off | Switch the stove on/off |
+| `temperature` | Room temperature at the stove |
+| `heatingSetpoint` / `setHeatingSetpoint()` | Room target temperature |
+| `thermostatOperatingState` | `heating` or `idle` |
+| `powerLevel` / `setPowerLevel()` | Power level (min/max in `powerLevelMin`/`powerLevelMax`) |
+| `stoveStatus`, `stoveStatusCode` | Operating state as text (e.g. START, WORK, ECO STOP) |
+| `alarm`, `alarmCode` | Current alarm |
+| `flueGasTemperature`, `realPower`, `exhaustFanSpeed`, `pelletsLow`, working hours … | Only if your stove has the register |
+| `waterTemperature`, `waterSetpoint` / `setWaterSetpoint()` | For boiler (water-heating) stoves |
+| `syncClock` | Set the stove clock to hub time |
+| `setRegister(key, value)` / `listRegisters` | Expert access to all registers |
+| `cloudStatus`, `lastUpdate` | Connection status |
 
-Weil der Treiber die Hubitat-Capability *Thermostat* hat, taucht der Ofen auch in Dashboards,
-Rule Machine, Alexa, Google Home und HomeKit als Thermostat auf.
+Because the driver has the Hubitat *Thermostat* capability, the stove also shows up as a
+thermostat in dashboards, Rule Machine, Alexa, Google Home and HomeKit.
 
 ## Installation
 
-1. Hubitat-Oberfläche öffnen, dann **Drivers Code → New Driver**.
-2. Den Inhalt von [`drivers/stufe-a-pellet-italia.groovy`](drivers/stufe-a-pellet-italia.groovy) einfügen und **Save** klicken.
-3. **Devices → Add Device → Virtual** wählen, einen Namen vergeben (z.B. „Pelletofen“) und als Typ
-   **Stufe a Pellet Italia (Agua IOT)** auswählen.
-4. Auf der Geräteseite **E-Mail** und **Passwort** des App-Kontos eintragen und **Save Preferences** klicken.
-5. Nach ein paar Sekunden sollte `cloudStatus` den Wert `online` zeigen und die Werte erscheinen.
+1. Open the Hubitat web UI, then **Drivers Code → New Driver**.
+2. Paste the contents of [`drivers/stufe-a-pellet-italia.groovy`](drivers/stufe-a-pellet-italia.groovy) and click **Save**.
+3. Choose **Devices → Add Device → Virtual**, give it a name (e.g. “Pellet stove”) and select
+   **Stufe a Pellet Italia (Agua IOT)** as the type.
+4. On the device page, enter the **Email** and **Password** of the app account and click **Save Preferences**.
+5. After a few seconds `cloudStatus` should show `online` and the values should appear.
 
-Tipp: Unter *State Variables* stehen nach dem ersten Abruf die verfügbaren Sprachcodes
-(`availableLanguages`). Steht dort zum Beispiel `GER` oder `DEU`, kannst du diesen Code in der
-Einstellung *Sprache der Statustexte* eintragen. Dann erscheinen die Statustexte auf Deutsch.
+Tip: after the first refresh, *State Variables* lists the available language codes
+(`availableLanguages`). Enter one of them, e.g. `ENG`, `ITA` or `GER`, in the preference
+*Language of status texts* to get the stove’s status texts in that language.
 
-## Hinweise
+## Notes
 
-- **Die App funktioniert weiter.** Der Treiber meldet sich als eigene „App-Instanz“ an.
-- **Abfrageintervall:** Jede Abfrage weckt das WLAN-Modul des Ofens. Fünf Minuten sind ein guter Wert,
-  kürzere Intervalle belasten Cloud und Modul unnötig.
-- **Mehrere Öfen:** Lege für jeden Ofen ein eigenes Gerät an und trage den Ofennamen oder die
-  Seriennummer unter *Ofen* ein.
-- **Fahrenheit:** Wenn der Hub auf °F steht, rechnet der Treiber automatisch um.
-- **Fehlersuche:** Debug-Logging einschalten, `refresh` ausführen und die Logs ansehen.
-  `listRegisters` gibt alle Register mit ihren aktuellen Werten aus.
+- **The app keeps working.** The driver signs in as its own “app instance”.
+- **Polling interval:** every poll wakes up the stove’s Wi-Fi module. Five minutes is a good value;
+  shorter intervals put unnecessary load on the cloud and the module.
+- **Several stoves:** create one device per stove and enter the stove name or serial number under
+  *Stove (name or serial number)*.
+- **Fahrenheit:** if the hub is set to °F, the driver converts automatically.
+- **Troubleshooting:** enable debug logging, run `refresh` and check the logs. `listRegisters`
+  prints all registers with their current values.
 
-### Beispiel-Regeln (Rule Machine)
+### Example rules (Rule Machine)
 
-- Ofen um 6:00 einschalten, wenn jemand zu Hause ist: *Actions → Switch → on*.
-- Benachrichtigung, wenn `alarm` sich ändert und nicht „NO ALARM“ ist, oder wenn `pelletsLow` = true.
-- Sollwert abhängig vom Modus „Nacht“ über `setHeatingSetpoint(18)` setzen.
+- Switch the stove on at 6:00 if someone is home: *Actions → Switch → on*.
+- Notify when `alarm` changes and is not “NO ALARM”, or when `pelletsLow` = true.
+- Set the setpoint depending on the “Night” mode via `setHeatingSetpoint(18)`.
 
-## Technik
+## Technical details
 
-Das Protokoll wurde aus der App (Version 2.1.3, Flutter) ermittelt und stimmt mit dem
-Home-Assistant-Projekt [home_assistant_micronova_agua_iot](https://github.com/vincentwolsink/home_assistant_micronova_agua_iot) (Apache-2.0) überein:
+The protocol was derived from the app (version 2.1.3, Flutter) and matches the Home Assistant
+project [home_assistant_micronova_agua_iot](https://github.com/vincentwolsink/home_assistant_micronova_agua_iot) (Apache-2.0):
 
-`appSignup` → `userLogin` (JWT) → `deviceList` → `deviceGetInfo` → `deviceGetRegistersMap`, dann
-zyklisch `deviceGetBufferReading` + `deviceJobStatus/{id}`. Geschrieben wird mit `deviceRequestWriting`
-(Protokoll `RWMSmaster`). Die Registerformeln (z.B. `IF(#>32767,(#-65536)/10,#/10)`) wertet ein
-eigener kleiner Parser aus, weil `eval` auf Hubitat nicht erlaubt ist.
+`appSignup` → `userLogin` (JWT) → `deviceList` → `deviceGetInfo` → `deviceGetRegistersMap`, then
+periodically `deviceGetBufferReading` + `deviceJobStatus/{id}`. Writes use `deviceRequestWriting`
+(protocol `RWMSmaster`). The register formulas (e.g. `IF(#>32767,(#-65536)/10,#/10)`) are evaluated
+by a small parser of its own, because `eval` is not allowed on Hubitat.

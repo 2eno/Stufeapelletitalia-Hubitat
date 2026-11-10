@@ -1,20 +1,20 @@
 /**
- *  Stufe a Pellet Italia – Pelletofen (Micronova Agua IOT Cloud)
+ *  Stufe a Pellet Italia – pellet stove (Micronova Agua IOT cloud)
  *
- *  Hubitat-Treiber für Pelletöfen, die mit der App "Stufe a pellet Italia"
- *  (Micronova Navel-WLAN-Modul, Agua IOT Cloud) gesteuert werden.
+ *  Hubitat driver for pellet stoves controlled with the app "Stufe a pellet Italia"
+ *  (Micronova Navel Wi-Fi module, Agua IOT cloud).
  *
- *  Der Treiber spricht dieselbe Cloud-API wie die App:
+ *  The driver talks to the same cloud API as the app:
  *    https://stufepelletitalia.agua-iot.com  (customer_code 015142)
  *
- *  Ablauf: appSignup -> userLogin -> deviceList -> deviceGetInfo ->
- *  deviceGetRegistersMap (einmalig) und danach zyklisch
- *  deviceGetBufferReading + deviceJobStatus. Geschrieben wird mit
- *  deviceRequestWriting. Alle Werte werden über die vom Server gelieferte
- *  Registerkarte (Offset, Maske, Formel) umgerechnet, so dass der Treiber
- *  für alle Öfen dieser Marke funktioniert.
+ *  Flow: appSignup -> userLogin -> deviceList -> deviceGetInfo ->
+ *  deviceGetRegistersMap (once), then periodically
+ *  deviceGetBufferReading + deviceJobStatus. Writes use
+ *  deviceRequestWriting. All values are converted using the register map
+ *  supplied by the server (offset, mask, formula), so the driver works
+ *  for all stoves of this brand.
  *
- *  Protokoll abgeleitet aus der App (v2.1.3) und dem Projekt
+ *  Protocol derived from the app (v2.1.3) and the project
  *  home_assistant_micronova_agua_iot (Apache-2.0).
  */
 
@@ -29,7 +29,7 @@ import groovy.transform.Field
 @Field static final String DEFAULT_BRAND_ID = "1"
 @Field static final String REGISTERS_MAP_LAST_UPDATE = "2018-06-03T08:59:54.043"
 
-// Rohwert, den das WLAN-Modul bei einem fehlgeschlagenen Registerlesen liefert
+// Raw value the Wi-Fi module returns when reading a register failed
 @Field static final long READING_ERROR_VALUE = 0x8000
 
 @Field static final List AIR_VARIANTS = ["air", "air2", "air3", "air_palm"]
@@ -41,7 +41,7 @@ import groovy.transform.Field
     "ALARM MEMORY", "MEM.ALM", "MEM. ALARM", "7", "8", "9"
 ]
 
-// Fallback, falls die Registerkarte keine Texte (enc_val) liefert
+// Fallback if the register map has no texts (enc_val)
 @Field static final Map STATUS_FALLBACK = [
     0: "OFF", 1: "START", 2: "LOAD PELLETS", 3: "FLAME LIGHT", 4: "ON",
     5: "CLEANING FIRE-POT", 6: "FINAL CLEANING", 7: "ECO STOP", 8: "PELLETS DEPLETED",
@@ -58,7 +58,7 @@ import groovy.transform.Field
     28: "REVOLUTION FAILURE SMOKE ENCODER", 29: "CYCLE LIMIT CLEANING"
 ]
 
-// Zusätzliche Messwerte: Attribut -> Registerschlüssel (nur wenn vom Ofen unterstützt)
+// Additional readings: attribute -> register key (only if the stove supports it)
 @Field static final Map EXTRA_NUMBERS = [
     realPower         : "real_power_get",
     exhaustFanSpeed   : "giri_estrattore_get",
@@ -103,12 +103,12 @@ metadata {
         attribute "cloudStatus", "string"
         attribute "lastUpdate", "string"
 
-        command "setPowerLevel", [[name: "level*", type: "NUMBER", description: "Leistungsstufe (z.B. 1-5)"]]
-        command "setWaterSetpoint", [[name: "temperature*", type: "NUMBER", description: "Wasser-Solltemperatur"]]
+        command "setPowerLevel", [[name: "level*", type: "NUMBER", description: "Power level (e.g. 1-5)"]]
+        command "setWaterSetpoint", [[name: "temperature*", type: "NUMBER", description: "Water target temperature"]]
         command "syncClock"
         command "setRegister", [
-            [name: "registerKey*", type: "STRING", description: "Registerschlüssel, z.B. power_set"],
-            [name: "value*", type: "STRING", description: "Wert (Zahl oder Text laut Registerkarte)"]
+            [name: "registerKey*", type: "STRING", description: "Register key, e.g. power_set"],
+            [name: "value*", type: "STRING", description: "Value (number or text according to the register map)"]
         ]
         command "listRegisters"
         command "reloadRegisterMap"
@@ -116,34 +116,34 @@ metadata {
     }
 
     preferences {
-        input name: "email", type: "text", title: "E-Mail", description: "Login der App „Stufe a pellet Italia“", required: true
-        input name: "password", type: "password", title: "Passwort", required: true
-        input name: "deviceSelector", type: "text", title: "Ofen (Name oder Seriennummer)",
-              description: "Nur nötig, wenn mehrere Öfen im Konto sind. Leer = erster Ofen.", required: false
-        input name: "pollInterval", type: "enum", title: "Abfrageintervall", defaultValue: "5",
-              options: ["0": "nur manuell", "1": "1 Minute", "2": "2 Minuten", "5": "5 Minuten",
-                        "10": "10 Minuten", "15": "15 Minuten", "30": "30 Minuten", "60": "60 Minuten"]
-        input name: "language", type: "text", title: "Sprache der Statustexte", defaultValue: "ENG",
-              description: "Sprachcode der Registerkarte (z.B. ENG, ITA, GER). Verfügbare Codes stehen nach dem ersten Abruf unter „State Variables“."
-        input name: "airTempFix", type: "bool", title: "Raumtemperaturen > 100 ignorieren", defaultValue: false,
-              description: "Für Öfen, die das Temperaturregister zweckentfremden."
-        input name: "readingErrorFix", type: "bool", title: "Lesefehler (0x8000) ignorieren", defaultValue: false
-        input name: "apiUrl", type: "text", title: "API-URL (Experte)", defaultValue: DEFAULT_API_URL, required: false
-        input name: "customerCode", type: "text", title: "Customer-Code (Experte)", defaultValue: DEFAULT_CUSTOMER_CODE, required: false
-        input name: "brandId", type: "text", title: "Brand-ID (Experte)", defaultValue: DEFAULT_BRAND_ID, required: false
-        input name: "httpTimeout", type: "number", title: "HTTP-Timeout (Sekunden)", defaultValue: 30, range: "5..120"
-        input name: "bufferReadTimeout", type: "number", title: "Max. Wartezeit auf Ofenantwort (Sekunden)", defaultValue: 30, range: "5..120"
-        input name: "logEnable", type: "bool", title: "Debug-Logging (schaltet sich nach 30 Min. ab)", defaultValue: true
-        input name: "txtEnable", type: "bool", title: "Beschreibungs-Logging", defaultValue: true
+        input name: "email", type: "text", title: "Email", description: "Login of the “Stufe a pellet Italia” app", required: true
+        input name: "password", type: "password", title: "Password", required: true
+        input name: "deviceSelector", type: "text", title: "Stove (name or serial number)",
+              description: "Only needed if the account has several stoves. Empty = first stove.", required: false
+        input name: "pollInterval", type: "enum", title: "Polling interval", defaultValue: "5",
+              options: ["0": "manual only", "1": "1 minute", "2": "2 minutes", "5": "5 minutes",
+                        "10": "10 minutes", "15": "15 minutes", "30": "30 minutes", "60": "60 minutes"]
+        input name: "language", type: "text", title: "Language of status texts", defaultValue: "ENG",
+              description: "Language code of the register map (e.g. ENG, ITA, GER). Available codes are listed under “State Variables” after the first refresh."
+        input name: "airTempFix", type: "bool", title: "Ignore room temperatures > 100", defaultValue: false,
+              description: "For stoves that misuse the temperature register."
+        input name: "readingErrorFix", type: "bool", title: "Ignore read errors (0x8000)", defaultValue: false
+        input name: "apiUrl", type: "text", title: "API URL (expert)", defaultValue: DEFAULT_API_URL, required: false
+        input name: "customerCode", type: "text", title: "Customer code (expert)", defaultValue: DEFAULT_CUSTOMER_CODE, required: false
+        input name: "brandId", type: "text", title: "Brand ID (expert)", defaultValue: DEFAULT_BRAND_ID, required: false
+        input name: "httpTimeout", type: "number", title: "HTTP timeout (seconds)", defaultValue: 30, range: "5..120"
+        input name: "bufferReadTimeout", type: "number", title: "Max. wait for stove response (seconds)", defaultValue: 30, range: "5..120"
+        input name: "logEnable", type: "bool", title: "Debug logging (turns off after 30 min)", defaultValue: true
+        input name: "txtEnable", type: "bool", title: "Description text logging", defaultValue: true
     }
 }
 
 /* ======================================================================
- *  Lebenszyklus
+ *  Lifecycle
  * ====================================================================== */
 
 void installed() {
-    log.info "${device.displayName}: installiert (Treiber ${DRIVER_VERSION})"
+    log.info "${device.displayName}: installed (driver ${DRIVER_VERSION})"
     sendEvent(name: "supportedThermostatModes", value: JsonOutput.toJson(["heat", "off"]))
     sendEvent(name: "supportedThermostatFanModes", value: JsonOutput.toJson(["auto"]))
     sendEvent(name: "thermostatFanMode", value: "auto")
@@ -151,7 +151,7 @@ void installed() {
 }
 
 void updated() {
-    log.info "${device.displayName}: Einstellungen gespeichert"
+    log.info "${device.displayName}: preferences saved"
     String fingerprint = [settings.email, settings.password, apiUrl(), customerCode(), brandId(), settings.deviceSelector].join("|").hashCode().toString()
     if (state.configFingerprint != fingerprint) {
         clearSession(true)
@@ -174,7 +174,7 @@ void uninstalled() {
 }
 
 void logsOff() {
-    log.warn "${device.displayName}: Debug-Logging deaktiviert"
+    log.warn "${device.displayName}: debug logging disabled"
     device.updateSetting("logEnable", [value: "false", type: "bool"])
 }
 
@@ -191,7 +191,7 @@ private void schedulePolling() {
 }
 
 /* ======================================================================
- *  Befehle
+ *  Commands
  * ====================================================================== */
 
 void poll() {
@@ -225,43 +225,43 @@ void setThermostatMode(String mode) {
             writeOnOff(false)
             break
         default:
-            log.warn "${device.displayName}: Modus '${mode}' wird nicht unterstützt (nur heat/off)"
+            log.warn "${device.displayName}: mode '${mode}' is not supported (heat/off only)"
     }
 }
 
 void auto() { setThermostatMode("auto") }
 void emergencyHeat() { setThermostatMode("emergency heat") }
-void cool() { log.warn "${device.displayName}: Kühlen wird nicht unterstützt" }
-void setCoolingSetpoint(temperature) { log.warn "${device.displayName}: Kühl-Sollwert wird nicht unterstützt" }
+void cool() { log.warn "${device.displayName}: cooling is not supported" }
+void setCoolingSetpoint(temperature) { log.warn "${device.displayName}: cooling setpoint is not supported" }
 void fanAuto() { sendEvent(name: "thermostatFanMode", value: "auto") }
-void fanCirculate() { log.warn "${device.displayName}: Lüftermodus wird nicht unterstützt" }
-void fanOn() { log.warn "${device.displayName}: Lüftermodus wird nicht unterstützt" }
-void setThermostatFanMode(String mode) { if (mode != "auto") log.warn "${device.displayName}: Lüftermodus '${mode}' wird nicht unterstützt" }
-void setSchedule(schedule) { log.warn "${device.displayName}: Zeitpläne bitte in der App oder per Rule Machine einrichten" }
+void fanCirculate() { log.warn "${device.displayName}: fan mode is not supported" }
+void fanOn() { log.warn "${device.displayName}: fan mode is not supported" }
+void setThermostatFanMode(String mode) { if (mode != "auto") log.warn "${device.displayName}: fan mode '${mode}' is not supported" }
+void setSchedule(schedule) { log.warn "${device.displayName}: please set up schedules in the app or with Rule Machine" }
 
 void setHeatingSetpoint(temperature) {
     if (!ensureSession()) return
     String key = temperatureKey(AIR_VARIANTS, "set") ?: (state.regs?.containsKey("temp_air_set") ? "temp_air_set" : null)
     if (!key) {
-        log.warn "${device.displayName}: Ofen hat kein Register für die Raum-Solltemperatur"
+        log.warn "${device.displayName}: stove has no register for the room target temperature"
         return
     }
-    writeRegisters([(key): toCelsius(temperature as BigDecimal)], false, "Solltemperatur ${temperature}°")
+    writeRegisters([(key): toCelsius(temperature as BigDecimal)], false, "target temperature ${temperature}°")
 }
 
 void setWaterSetpoint(temperature) {
     if (!ensureSession()) return
     String key = temperatureKey(WATER_VARIANTS, "set")
     if (!key) {
-        log.warn "${device.displayName}: Ofen hat kein Register für die Wasser-Solltemperatur"
+        log.warn "${device.displayName}: stove has no register for the water target temperature"
         return
     }
-    writeRegisters([(key): toCelsius(temperature as BigDecimal)], false, "Wasser-Solltemperatur ${temperature}°")
+    writeRegisters([(key): toCelsius(temperature as BigDecimal)], false, "water target temperature ${temperature}°")
 }
 
 void setPowerLevel(level) {
     if (!ensureSession()) return
-    writeRegisters([(powerKey()): level as BigDecimal], false, "Leistungsstufe ${level}")
+    writeRegisters([(powerKey()): level as BigDecimal], false, "power level ${level}")
 }
 
 void syncClock() {
@@ -276,10 +276,10 @@ void syncClock() {
         calendar_year_set : c.get(Calendar.YEAR)
     ].findAll { k, v -> state.regs?.containsKey(k) }
     if (!items) {
-        log.warn "${device.displayName}: Ofen hat keine Uhr-Register"
+        log.warn "${device.displayName}: stove has no clock registers"
         return
     }
-    writeRegisters(items, true, "Uhrzeit")
+    writeRegisters(items, true, "clock")
 }
 
 void setRegister(String key, String value) {
@@ -287,12 +287,12 @@ void setRegister(String key, String value) {
     key = key?.trim()?.toLowerCase()
     Map reg = state.regs?.get(key)
     if (!reg) {
-        log.warn "${device.displayName}: Register '${key}' existiert nicht (siehe listRegisters)"
+        log.warn "${device.displayName}: register '${key}' does not exist (see listRegisters)"
         return
     }
     def numeric = valueForDescription(key, value?.trim())
     if (numeric == null) {
-        log.warn "${device.displayName}: '${value}' ist kein gültiger Wert für ${key}"
+        log.warn "${device.displayName}: '${value}' is not a valid value for ${key}"
         return
     }
     writeRegisters([(key): numeric], false, "${key} = ${value}")
@@ -300,7 +300,7 @@ void setRegister(String key, String value) {
 
 void listRegisters() {
     if (!ensureSession()) return
-    StringBuilder sb = new StringBuilder("${device.displayName}: ${state.regs.size()} Register<br>")
+    StringBuilder sb = new StringBuilder("${device.displayName}: ${state.regs.size()} registers<br>")
     state.regs.keySet().sort().each { String key ->
         Map r = state.regs[key]
         def v = regValue(key)
@@ -324,7 +324,7 @@ void resetSession() {
 }
 
 /* ======================================================================
- *  Cloud-Sitzung (synchron, nur bei Bedarf)
+ *  Cloud session (synchronous, only when needed)
  * ====================================================================== */
 
 private String apiUrl() { (settings.apiUrl ?: DEFAULT_API_URL).trim().replaceAll(/\/+$/, "") }
@@ -357,7 +357,7 @@ private void clearSession(boolean includeDevice) {
 
 private boolean ensureSession() {
     if (!settings.email || !settings.password) {
-        log.warn "${device.displayName}: Bitte E-Mail und Passwort in den Einstellungen eintragen"
+        log.warn "${device.displayName}: please enter email and password in the preferences"
         setCloudStatus("not configured")
         return false
     }
@@ -383,10 +383,10 @@ private boolean renewToken() {
         if (res.status == 201 && res.data?.token) {
             state.token = res.data.token
             state.tokenExp = jwtExp(state.token)
-            logDebug "Token erneuert"
+            logDebug "token renewed"
             return true
         }
-        log.warn "${device.displayName}: Token-Erneuerung fehlgeschlagen (${res.status}), neuer Login"
+        log.warn "${device.displayName}: token renewal failed (${res.status}), logging in again"
     }
     return login()
 }
@@ -403,12 +403,12 @@ private boolean registerApp() {
     ]
     Map res = syncPost("/appSignup", payload, baseHeaders())
     if (res.status != 201) {
-        log.error "${device.displayName}: App-Registrierung fehlgeschlagen (${res.status}) ${res.data ?: res.error ?: ''}"
+        log.error "${device.displayName}: app signup failed (${res.status}) ${res.data ?: res.error ?: ''}"
         setCloudStatus("error: app signup failed")
         return false
     }
     state.appRegistered = true
-    logDebug "App-ID registriert"
+    logDebug "app ID registered"
     return true
 }
 
@@ -417,20 +417,20 @@ private boolean login() {
                        baseHeaders() + ["local": "true", "Authorization": state.appUuid])
     if (res.status != 200 || !res.data?.token) {
         if (res.status == 401 || res.status == 403 || res.status == 404) {
-            log.error "${device.displayName}: Login fehlgeschlagen – E-Mail/Passwort prüfen (${res.status})"
+            log.error "${device.displayName}: login failed – check email/password (${res.status})"
             setCloudStatus("error: login failed")
         } else {
-            log.error "${device.displayName}: Login fehlgeschlagen (${res.status}) ${res.data ?: res.error ?: ''}"
+            log.error "${device.displayName}: login failed (${res.status}) ${res.data ?: res.error ?: ''}"
             setCloudStatus("error: cloud unreachable")
         }
-        // Bei Fehlern App-ID beim nächsten Versuch neu registrieren
+        // On errors, register a new app ID on the next attempt
         state.remove("appRegistered")
         return false
     }
     state.token = res.data.token
     state.refreshToken = res.data.refresh_token
     state.tokenExp = jwtExp(state.token)
-    logDebug "Login erfolgreich"
+    logDebug "login successful"
     return true
 }
 
@@ -438,16 +438,16 @@ private boolean fetchDevice() {
     Map res = authPost("/deviceList", [:])
     List devices = res.data?.device instanceof List ? res.data.device : null
     if (res.status != 200 || devices == null) {
-        log.error "${device.displayName}: Geräteliste konnte nicht geladen werden (${res.status})"
+        log.error "${device.displayName}: could not load device list (${res.status})"
         setCloudStatus("error: device list failed")
         return false
     }
     if (!devices) {
-        log.error "${device.displayName}: Im Konto ist kein Ofen registriert"
+        log.error "${device.displayName}: no stove is registered in the account"
         setCloudStatus("error: no stove in account")
         return false
     }
-    state.availableDevices = devices.collect { "${it.name} (Serie ${it.product_serial}, ${it.name_product})".toString() }
+    state.availableDevices = devices.collect { "${it.name} (serial ${it.product_serial}, ${it.name_product})".toString() }
 
     Map dev = devices[0]
     String sel = settings.deviceSelector?.trim()?.toLowerCase()
@@ -456,7 +456,7 @@ private boolean fetchDevice() {
             [d.name, d.product_serial, d.id_device, d.id].any { it != null && it.toString().toLowerCase() == sel }
         }
         if (!dev) {
-            log.error "${device.displayName}: Ofen '${settings.deviceSelector}' nicht gefunden. Verfügbar: ${state.availableDevices}"
+            log.error "${device.displayName}: stove '${settings.deviceSelector}' not found. Available: ${state.availableDevices}"
             setCloudStatus("error: stove not found")
             return false
         }
@@ -467,7 +467,7 @@ private boolean fetchDevice() {
     if (info.status == 200 && info.data?.device_info instanceof List && info.data.device_info) {
         idRegistersMap = info.data.device_info[0].id_registers_map ?: idRegistersMap
     } else {
-        log.warn "${device.displayName}: deviceGetInfo fehlgeschlagen (${info.status}), nutze Daten der Geräteliste"
+        log.warn "${device.displayName}: deviceGetInfo failed (${info.status}), using data from the device list"
     }
 
     state.idDevice = dev.id_device
@@ -478,8 +478,8 @@ private boolean fetchDevice() {
     device.updateDataValue("stoveName", dev.name?.toString())
     device.updateDataValue("model", dev.name_product?.toString())
     device.updateDataValue("serial", dev.product_serial?.toString())
-    if (dev.is_online == false) log.warn "${device.displayName}: Laut Cloud ist der Ofen offline"
-    log.info "${device.displayName}: verbunden mit Ofen '${dev.name}' (${dev.name_product})"
+    if (dev.is_online == false) log.warn "${device.displayName}: the cloud reports the stove as offline"
+    log.info "${device.displayName}: connected to stove '${dev.name}' (${dev.name_product})"
     return true
 }
 
@@ -488,14 +488,14 @@ private boolean fetchRegistersMap() {
                        [id_device: state.idDevice, id_product: state.idProduct, last_update: REGISTERS_MAP_LAST_UPDATE])
     List maps = res.data?.device_registers_map?.registers_map
     if (res.status != 200 || !(maps instanceof List)) {
-        log.error "${device.displayName}: Registerkarte konnte nicht geladen werden (${res.status})"
+        log.error "${device.displayName}: could not load register map (${res.status})"
         setCloudStatus("error: registers map failed")
         return false
     }
     Map regMap = maps.find { it.id?.toString() == state.idRegistersMap?.toString() }
     if (!regMap && maps.size() == 1) regMap = maps[0]
     if (!regMap) {
-        log.error "${device.displayName}: Registerkarte ${state.idRegistersMap} nicht in der Antwort enthalten"
+        log.error "${device.displayName}: register map ${state.idRegistersMap} missing from the response"
         setCloudStatus("error: registers map failed")
         return false
     }
@@ -536,12 +536,12 @@ private boolean fetchRegistersMap() {
         regs[reg.reg_key.toString().toLowerCase()] = r
     }
     if (!regs) {
-        log.error "${device.displayName}: Registerkarte ist leer"
+        log.error "${device.displayName}: register map is empty"
         return false
     }
     state.regs = regs
     state.availableLanguages = languages.sort().join(", ")
-    log.info "${device.displayName}: Registerkarte geladen (${regs.size()} Register, Sprachen: ${state.availableLanguages})"
+    log.info "${device.displayName}: register map loaded (${regs.size()} registers, languages: ${state.availableLanguages})"
     return true
 }
 
@@ -574,7 +574,7 @@ private Map syncPost(String path, Map body, Map headers) {
         try { result.data = e.response?.data } catch (ignored) { }
     } catch (Exception e) {
         result.error = e.message
-        log.error "${device.displayName}: Verbindung zu ${apiUrl()} fehlgeschlagen: ${e.message}"
+        log.error "${device.displayName}: connection to ${apiUrl()} failed: ${e.message}"
     }
     logDebug "POST ${path} -> ${result.status}"
     return result
@@ -587,13 +587,13 @@ private Long jwtExp(String token) {
         Map claims = new JsonSlurper().parseText(new String(part.decodeBase64(), "UTF-8"))
         return claims.exp != null ? claims.exp as long : null
     } catch (Exception e) {
-        logDebug "Token ohne lesbares Ablaufdatum: ${e.message}"
+        logDebug "token without readable expiry: ${e.message}"
         return null
     }
 }
 
 /* ======================================================================
- *  Asynchrones Lesen / Schreiben (deviceJobStatus-Abfrage)
+ *  Asynchronous read / write (deviceJobStatus polling)
  * ====================================================================== */
 
 private void asyncApi(String method, String path, Map body, String handler, Map data) {
@@ -618,7 +618,7 @@ void asyncResponse(resp, Map data) {
     int status = 0
     try { status = resp.getStatus() as int } catch (ignored) { }
     if (status == 401 && !data.retried) {
-        logDebug "401 auf ${data.path}, erneuere Token"
+        logDebug "401 on ${data.path}, renewing token"
         if (renewToken()) {
             asyncApi(data.method, data.path, data.body, data.handler, data + [retried: true])
             return
@@ -630,7 +630,7 @@ void asyncResponse(resp, Map data) {
             def parsed = new JsonSlurper().parseText(resp.getData())
             json = parsed instanceof Map ? parsed : null
         } catch (Exception e) {
-            logDebug "Antwort von ${data.path} nicht lesbar: ${e.message}"
+            logDebug "response from ${data.path} not readable: ${e.message}"
         }
     } else {
         String err = null
@@ -648,7 +648,7 @@ private void readDevice() {
     Long started = state.readStarted as Long
     long maxRuntime = (bufferReadTimeout() + 3L * httpTimeout()) * 1000L
     if (started && now() - started < maxRuntime) {
-        logDebug "Abfrage läuft bereits"
+        logDebug "poll already running"
         return
     }
     if (!ensureSession()) return
@@ -660,7 +660,7 @@ private void readDevice() {
 private void readRequested(int status, Map json, Map data) {
     if (status != 200 || !json?.idRequest) {
         state.remove("readStarted")
-        log.warn "${device.displayName}: Leseanfrage abgelehnt (${status})"
+        log.warn "${device.displayName}: read request rejected (${status})"
         setCloudStatus(status == 0 ? "error: cloud unreachable" : "error: read request failed")
         return
     }
@@ -670,7 +670,7 @@ private void readRequested(int status, Map json, Map data) {
 
 private void writeRequested(int status, Map json, Map data) {
     if (status != 200 || !json?.idRequest) {
-        log.error "${device.displayName}: ${data.label} konnte nicht gesendet werden (${status})"
+        log.error "${device.displayName}: could not send ${data.label} (${status})"
         setCloudStatus("error: write request failed")
         return
     }
@@ -688,7 +688,7 @@ private void jobStatus(int status, Map json, Map data) {
     if (data.kind == "read") {
         boolean pending = (json == null || jobState == "waiting")
         if (pending && now() - (data.started as long) < bufferReadTimeout() * 1000L) {
-            // wie die App: Wartezeit zwischen den Abfragen steigt
+            // like the app: the wait between polls increases
             runInMillis(Math.min(attempt + 1, 5) * 1000L, "pollJob", [overwrite: false, data: data + [attempt: attempt + 1]])
             return
         }
@@ -696,26 +696,26 @@ private void jobStatus(int status, Map json, Map data) {
         if (jobState == "completed" && json.jobAnswerData?.Items instanceof List) {
             processBuffer(json.jobAnswerData)
         } else if (pending) {
-            log.warn "${device.displayName}: Ofen hat nicht innerhalb von ${bufferReadTimeout()} s geantwortet"
+            log.warn "${device.displayName}: stove did not respond within ${bufferReadTimeout()} s"
             setCloudStatus("stove not responding")
         } else {
-            log.warn "${device.displayName}: Lesen fehlgeschlagen (Status '${jobState}')"
+            log.warn "${device.displayName}: read failed (status '${jobState}')"
             setCloudStatus("error: read failed")
         }
         return
     }
 
-    // Schreiben: bis zu 10 Wiederholungen im Sekundentakt
+    // Writing: up to 10 retries, one per second
     if (jobState != "completed" && attempt <= 10) {
         runInMillis(1000, "pollJob", [overwrite: false, data: data + [attempt: attempt + 1]])
         return
     }
     if (jobState == "completed" && json.jobAnswerData instanceof Map && json.jobAnswerData.containsKey("Cmd")) {
-        if (settings.txtEnable) log.info "${device.displayName}: ${data.label} übernommen"
+        if (settings.txtEnable) log.info "${device.displayName}: ${data.label} applied"
         setCloudStatus("online")
         runIn(3, "refresh")
     } else {
-        log.error "${device.displayName}: ${data.label} wurde vom Ofen nicht bestätigt (Status '${jobState}')"
+        log.error "${device.displayName}: ${data.label} was not confirmed by the stove (status '${jobState}')"
         setCloudStatus("error: write not confirmed")
     }
 }
@@ -724,7 +724,7 @@ private void writeOnOff(boolean turnOn) {
     if (!ensureSession()) return
     String key = "status_managed_get"
     if (!state.regs.containsKey(key)) {
-        log.warn "${device.displayName}: Ofen hat kein Register zum Ein-/Ausschalten"
+        log.warn "${device.displayName}: stove has no register for switching on/off"
         return
     }
     def value = valueForDescription(key, turnOn ? "ON" : "OFF", "ENG")
@@ -737,7 +737,7 @@ private void writeRegisters(Map items, boolean limitValueRaw, String label) {
     try {
         items.each { String key, value ->
             Map reg = state.regs[key]
-            if (!reg) throw new IllegalArgumentException("Register ${key} unbekannt")
+            if (!reg) throw new IllegalArgumentException("unknown register ${key}")
             offsets << (reg.o as int)
             masks << (reg.m as long)
             values << prepareValue(key, value as BigDecimal, limitValueRaw)
@@ -745,10 +745,10 @@ private void writeRegisters(Map items, boolean limitValueRaw, String label) {
             endians << "L"
         }
     } catch (IllegalArgumentException e) {
-        log.warn "${device.displayName}: ${label} nicht möglich: ${e.message}"
+        log.warn "${device.displayName}: ${label} not possible: ${e.message}"
         return
     }
-    logDebug "Schreibe ${label}: Items=${offsets} Values=${values}"
+    logDebug "writing ${label}: items=${offsets} values=${values}"
     asyncApi("POST", "/deviceRequestWriting", [
         id_device : state.idDevice,
         id_product: state.idProduct,
@@ -766,19 +766,19 @@ private long prepareValue(String key, BigDecimal value, boolean limitValueRaw) {
     BigDecimal min = reg.mn != null ? reg.mn as BigDecimal : null
     BigDecimal max = reg.mx != null ? reg.mx as BigDecimal : null
     if (!limitValueRaw && min != null && max != null && (value < min || value > max)) {
-        throw new IllegalArgumentException("Wert muss zwischen ${fmtNum(min)} und ${fmtNum(max)} liegen: ${fmtNum(value)}")
+        throw new IllegalArgumentException("value must be between ${fmtNum(min)} and ${fmtNum(max)}: ${fmtNum(value)}")
     }
     String formula = (reg.fi ?: "#").replace("#", fmtNum(value)).replace("Mod", "%")
     long raw = truncate(evalFormula(formula))
     if (limitValueRaw && min != null && max != null && (raw < min || raw > max)) {
-        throw new IllegalArgumentException("Rohwert muss zwischen ${fmtNum(min)} und ${fmtNum(max)} liegen: ${raw}")
+        throw new IllegalArgumentException("raw value must be between ${fmtNum(min)} and ${fmtNum(max)}: ${raw}")
     }
     if (reg.h) raw = Long.parseLong(raw.toString(), 16)
     return raw
 }
 
 /* ======================================================================
- *  Auswertung der Register
+ *  Evaluating registers
  * ====================================================================== */
 
 private void processBuffer(Map answer) {
@@ -795,7 +795,7 @@ private void processBuffer(Map answer) {
 }
 
 private void updateAttributes() {
-    // Status / Ein-Aus
+    // Status / on-off
     def status = regValue("status_get")
     if (status != null) {
         String descEng = regDescription("status_get", "ENG")?.toString()?.trim()?.toUpperCase()
@@ -819,7 +819,7 @@ private void updateAttributes() {
         emit("alarmCode", alarmCode)
     }
 
-    // Raumtemperatur und Sollwert
+    // Room temperature and setpoint
     String airGet = temperatureKey(AIR_VARIANTS, "get")
     if (airGet) {
         def t = regValue(airGet)
@@ -832,17 +832,17 @@ private void updateAttributes() {
         }
     }
 
-    // Wasser (Thermo-Öfen)
+    // Water (boiler stoves)
     String waterGet = temperatureKey(WATER_VARIANTS, "get")
     if (waterGet) emit("waterTemperature", fromCelsius(regValue(waterGet)), temperatureUnit())
     String waterSet = temperatureKey(WATER_VARIANTS, "set")
     if (waterSet) emit("waterSetpoint", fromCelsius(regValue(waterSet)), temperatureUnit())
 
-    // Abgastemperatur
+    // Flue gas temperature
     String flueKey = ["temp_gas_flue_get", "temp_probe_k_get"].find { state.regs.containsKey(it) && regValue(it) != null }
     if (flueKey) emit("flueGasTemperature", fromCelsius(regValue(flueKey)), temperatureUnit())
 
-    // Leistungsstufe
+    // Power level
     String pKey = powerKey()
     def power = regValue(pKey)
     if (power != null) {
@@ -870,7 +870,7 @@ private String powerKey() {
     (hybrid && regEnabled("real_power_wood_get")) ? "power_wood_set" : "power_set"
 }
 
-// Erstes nutzbares Temperaturregister (wie die App: vorhanden, aktiviert, Wert != 0)
+// First usable temperature register (like the app: present, enabled, value != 0)
 private String temperatureKey(List variants, String suffix) {
     variants.collect { "temp_${it}_${suffix}".toString() }.find { key ->
         state.regs?.containsKey(key) && regEnabled(key) && regValue(key)
@@ -899,7 +899,7 @@ private regValue(String key) {
     try {
         value = evalFormula((reg.f ?: "#").replace("#", masked.toString()).replace("Mod", "%"))
     } catch (Exception e) {
-        logDebug "Formel von ${key} ('${reg.f}') nicht auswertbar: ${e.message}"
+        logDebug "formula of ${key} ('${reg.f}') cannot be evaluated: ${e.message}"
         return null
     }
     if (settings.airTempFix && key.endsWith("air_get") && value > 100) return null
@@ -915,7 +915,7 @@ private regDescription(String key, String language) {
     return options?.get(fmtNum(value)) ?: value
 }
 
-// Text (z.B. "ON") oder Zahl in den numerischen Registerwert übersetzen
+// Translate a text (e.g. "ON") or number into the numeric register value
 private valueForDescription(String key, String text, String language = null) {
     if (text == null) return null
     Map enc = state.regs[key]?.e
@@ -934,15 +934,15 @@ private valueForDescription(String key, String text, String language = null) {
 }
 
 /* ======================================================================
- *  Formel-Auswertung (ersetzt Python-eval der Registerformeln)
- *  Unterstützt: + - * / // % ** & | ^ << >>, Vergleiche, and/or/not,
- *  "a if b else c", Klammern und IF(), int(), float(), abs(), round(), min(), max()
+ *  Formula evaluation (replaces Python eval of the register formulas)
+ *  Supports: + - * / // % ** & | ^ << >>, comparisons, and/or/not,
+ *  "a if b else c", parentheses and IF(), int(), float(), abs(), round(), min(), max()
  * ====================================================================== */
 
 private BigDecimal evalFormula(String expr) {
     Map ctx = [t: tokenize(expr), i: 0]
     BigDecimal v = parseTernary(ctx)
-    if (ctx.i < ctx.t.size()) throw new IllegalArgumentException("Unerwartetes Zeichen '${ctx.t[ctx.i]}'")
+    if (ctx.i < ctx.t.size()) throw new IllegalArgumentException("unexpected character '${ctx.t[ctx.i]}'")
     return v
 }
 
@@ -988,7 +988,7 @@ private List tokenize(String s) {
             i++
             continue
         }
-        throw new IllegalArgumentException("Unbekanntes Zeichen '${c}'")
+        throw new IllegalArgumentException("unknown character '${c}'")
     }
     return tokens
 }
@@ -1011,7 +1011,7 @@ private BigDecimal parseTernary(Map ctx) {
     if (isId(ctx, "if")) {
         ctx.i++
         BigDecimal cond = parseOr(ctx)
-        if (!isId(ctx, "else")) throw new IllegalArgumentException("'else' erwartet")
+        if (!isId(ctx, "else")) throw new IllegalArgumentException("'else' expected")
         ctx.i++
         BigDecimal other = parseTernary(ctx)
         return cond != 0 ? v : other
@@ -1114,11 +1114,11 @@ private BigDecimal parseMultiplicative(Map ctx) {
         if (op == "*") {
             v = v * r
         } else {
-            if (r == 0) throw new ArithmeticException("Division durch 0")
+            if (r == 0) throw new ArithmeticException("division by 0")
             BigDecimal floorDiv = v.divide(r, 0, BigDecimal.ROUND_FLOOR)
             if (op == "/") v = v.divide(r, 12, BigDecimal.ROUND_HALF_EVEN)
             else if (op == "//") v = floorDiv
-            else v = v - r * floorDiv   // Python-Modulo (Vorzeichen des Divisors)
+            else v = v - r * floorDiv   // Python modulo (sign of the divisor)
         }
     }
     return v
@@ -1143,7 +1143,7 @@ private BigDecimal parsePower(Map ctx) {
 }
 
 private BigDecimal parsePrimary(Map ctx) {
-    if (ctx.i >= ctx.t.size()) throw new IllegalArgumentException("Formel endet unerwartet")
+    if (ctx.i >= ctx.t.size()) throw new IllegalArgumentException("formula ends unexpectedly")
     Map tok = ctx.t[ctx.i]
     if (tok.n != null) { ctx.i++; return tok.n }
     if (tok.op == "(") {
@@ -1156,7 +1156,7 @@ private BigDecimal parsePrimary(Map ctx) {
         ctx.i++
         if (tok.id == "True") return BigDecimal.ONE
         if (tok.id == "False") return BigDecimal.ZERO
-        if (!isOp(ctx, "(")) throw new IllegalArgumentException("Unbekannter Name '${tok.id}'")
+        if (!isOp(ctx, "(")) throw new IllegalArgumentException("unknown name '${tok.id}'")
         ctx.i++
         List args = []
         if (!isOp(ctx, ")")) {
@@ -1166,13 +1166,13 @@ private BigDecimal parsePrimary(Map ctx) {
         expectOp(ctx, ")")
         return callFunction(tok.id, args)
     }
-    throw new IllegalArgumentException("Unerwartetes Zeichen '${tok.op}'")
+    throw new IllegalArgumentException("unexpected character '${tok.op}'")
 }
 
 private BigDecimal callFunction(String name, List args) {
     switch (name) {
         case "IF":
-            if (args.size() != 3) throw new IllegalArgumentException("IF braucht 3 Argumente")
+            if (args.size() != 3) throw new IllegalArgumentException("IF needs 3 arguments")
             return args[0] != 0 ? args[1] : args[2]
         case "int": return new BigDecimal(truncate(args[0]))
         case "float": return args[0]
@@ -1183,11 +1183,11 @@ private BigDecimal callFunction(String name, List args) {
         case "min": return args.min()
         case "max": return args.max()
     }
-    throw new IllegalArgumentException("Unbekannte Funktion '${name}'")
+    throw new IllegalArgumentException("unknown function '${name}'")
 }
 
 /* ======================================================================
- *  Hilfsfunktionen
+ *  Helpers
  * ====================================================================== */
 
 private long truncate(BigDecimal v) {
@@ -1236,7 +1236,7 @@ private void emit(String name, value, String unit = null) {
     Map evt = [name: name, value: v]
     if (unit) evt.unit = unit
     if (changed) {
-        evt.descriptionText = "${device.displayName} ${name} ist ${v}${unit ?: ''}"
+        evt.descriptionText = "${device.displayName} ${name} is ${v}${unit ?: ''}"
         if (settings.txtEnable) log.info evt.descriptionText
     }
     sendEvent(evt)
